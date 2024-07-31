@@ -1,0 +1,72 @@
+#!/usr/bin/env groovy
+
+@Library("com.optum.jenkins.pipeline.library@master") _
+import com.optum.jenkins.pipeline.library.artifactory.Artifactory
+import com.optum.jenkins.pipeline.library.scm.Git
+
+
+def URL = env.BUILD_URL	
+def JOB_NAME = env.JOB_NAME	
+def BUILD_NUMBER = env.BUILD_NUMBER	
+pipeline {
+  agent any
+  tools {
+    maven 'maven391new'
+     jdk 'java8'
+  }
+  
+    environment {
+    GIT_CREDENTIALS_ID = 'Sonar_Nav_GitHub'  //Generated a Github token and added the same in Jenkins credentials as a secret text
+    SONARQUBE_USER_CREDENTIALS = 'XLD_NAV' //User credentials created in Jenkins
+	SONAR_VERSION = 'sonar-scanner-2.8'   
+	    JAVA_VERSION = "11.0"
+  }
+  
+stages {
+  
+          stage('unit test cases') {
+        steps {
+            script {
+                
+                sh 'mvn clean verify'
+            }
+        }
+    }
+
+	
+stage('Build') {
+      steps {
+  jacoco()
+      }
+    }
+
+  stage('SonarQube Analysis using glSonarMavenScan') { 
+steps {
+    glSonarMavenScan gitUserCredentialsId:"${env.GIT_CREDENTIALS_ID}",
+    additionalProps:['sonar.login':'9a1ede6099886fd11bd9b11566a8eb611121660b','sonar.sources':'src','sonar.junit.reportPaths':'target/surefire-reports/TEST-*.xml']
+}
+
+	  
+	  
+	
+	 post  {
+                  always {
+                         echo "Sonar Scan executed"
+                  }
+                  failure {
+                        xlrCreateRelease serverCredentials: 'XLR_NAV', template: 'NVG/ACQ_Error_Notify_API', releaseTitle: 'PCQ Error Notification-$BUILD_NUMBER', variables: [[propertyName: 'URL', propertyValue: URL],[propertyName: 'STAGE', propertyValue: 'Sonar Scan']], startRelease: true 
+
+                  }
+                  success {
+                         echo "Sonar Scan succeeded"
+                        
+                  }
+                 }
+ 
+
+} 
+	
+
+}
+     
+  }
