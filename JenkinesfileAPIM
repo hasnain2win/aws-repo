@@ -1,0 +1,156 @@
+#!/usr/bin/env groovy
+import hudson.model.*
+@Library("com.optum.jenkins.pipeline.library@master") _
+
+pipeline {
+    agent any 
+    tools { maven 'Maven-3.2.3' }
+    parameters{
+
+        extendedChoice(description: 'What environment is this deploy to?', defaultValue: 'test',multiSelectDelimiter: ',', name: 'APP_ENV', quoteValue: false, saveJSONParameterToFile: false, type: 'PT_CHECKBOX', value: 'pcqtest,pcqstge,pcqperf,pcqtkch', visibleItemCount: 4)
+        string(defaultValue: "servicename", description: 'What is the name service? ', name: 'service_name')
+        string(defaultValue: "apiname", description: 'What is the name of this api? ', name: 'api_name')
+        
+    }
+    environment{
+        AZURECLI_VERSION = '2.23.0'
+    }
+
+    stages {
+        stage('Azure Login') {
+            steps {
+                script {
+                try { 
+                        withCredentials([azureServicePrincipal(credentialsId: 'NVGTSTAZURE',
+                                    subscriptionIdVariable: 'SUBS_ID',
+                                    clientIdVariable: 'CLIENT_ID',
+                                    clientSecretVariable: 'CLIENT_SECRET',
+                                    tenantIdVariable: 'TENANT_ID')]) {
+                sh '''
+                az login --service-principal -u $CLIENT_ID -p $CLIENT_SECRET -t $TENANT_ID
+                az account set -s "OptumRx Navigator 2 Cloud Non-Prod"
+                cd $WORKSPACE
+                echo "**********************************"
+                '''
+                }
+            } catch (err) {
+                            echo err.getMessage()
+                            echo "Error detected, but we will continue."
+                     }
+          }
+        }
+        /*post  {
+                  always {
+                         echo "Azure Login for "
+                  }
+                  failure {
+                         echo "Azure Login failed **"
+                         mail body: 'Azure Login failed for  **', subject: 'Azure Login ',
+                            to: 'maribell.sabik@optum.com'
+                  }
+                  success {
+                         echo "Azure Login succeeded "
+                         mail body: 'Azure Login succeeded for ', subject: 'Azure Login ',
+                            to: 'maribell.sabik@optum.com' 
+                  }
+            } */
+      }
+              stage('Extract pod external IP ') {
+                steps {
+                    script {
+                        def pod_endpoint=" "
+                        def Azure_api_endpoint=" "
+                        def pod_id=" "
+                        def env = 'pcq';
+                        def prefix = params.APP_ENV - env;
+                        def up_prefix = prefix.toUpperCase();
+                        echo up_prefix
+                       
+                        def name_space = 'pcq' + '-' + prefix;
+                        def name_space2 = 'istio-system';
+                        echo prefix
+                        echo name_space
+    
+                        def AZURE_grp_name="pcq-" + prefix + "-us-c-rg";
+                        def AZURE_aks_name="pcq-" + prefix + "-us-c-aks"; 
+                        def AZURE_acrurl_name="pcq" + prefix + "uscacr.azurecr.io";
+                        def AZURE_acr_reg="AZURE_REGISTRY_PW_PCQ" + up_prefix;
+                        echo AZURE_grp_name
+                        echo AZURE_aks_name
+                        echo AZURE_acrurl_name
+                        echo AZURE_acr_reg
+                        if (params.APP_ENV == "pcqtest" || params.APP_ENV == "pcqtest") {
+                            withCredentials([usernamePassword(credentialsId: "${AZURE_acr_reg}", usernameVariable: 'Navuser', passwordVariable: 'Navpass')])
+                            {
+                              sh("az aks get-credentials --resource-group ${AZURE_grp_name} --name ${AZURE_aks_name}") 
+                              pod_id = sh(script: "kubectl --namespace=$name_space get pods | grep ${service_name} | head -1 | sed 's/ .*//'", returnStdout: true)
+                              pod_endpt = sh(script: "((kubectl --namespace=$name_space describe pods ${pod_id}) | grep IP | head -1 | sed 's/^IP://' | sed 's/^ *//g')", returnStdout: true)
+                              pod_endpoint = pod_endpt.trim()
+                              Azure_api_endpoint="http://" + "${pod_endpoint}" + ":8951"
+                              echo pod_endpoint
+                              echo Azure_api_endpoint
+                            }
+                        }
+                        else if (params.APP_ENV == "pcqperf" || params.APP_ENV == "pcqstge") {
+                            withCredentials([usernamePassword(credentialsId: "${AZURE_acr_reg}", usernameVariable: 'Navuser', passwordVariable: 'Navpass')])
+                            {
+                              sh("az aks get-credentials --resource-group ${AZURE_grp_name} --name ${AZURE_aks_name}") 
+                              pod_endpt = sh(script: "((kubectl --namespace=$name_space2 describe pods istio-ingressgateway | grep 'LoadBalancer Ingress' | head -1 | sed 's/^LoadBalancer Ingress://' | sed 's/^ *//g')", returnStdout: true)
+                              pod_endpoint = pod_endpt.trim()
+                              Azure_api_endpoint="http://" + "${pod_endpoint}" + ":80"
+                              echo pod_endpoint
+                              echo Azure_api_endpoint
+                            }
+                        }
+                        
+                    }
+                  }
+                  /*post  {
+                  always {
+                         echo "Extract pod external IP Secret"
+                  }
+                  failure {
+                         echo "Extract pod external IP Secret"
+                         mail body: 'Extract pod external IP Secret failed', subject: 'Extract pod external IP Secret',
+                           to: 'maribell.sabik@optum.com'
+                  }
+                  success {
+                         echo "Extract pod external IP Secret"
+                         mail body: 'Extract pod external IP Secret succeeded', subject: 'Extract pod external IP Secret',
+                            to: 'maribell.sabik@optum.com' 
+                  }
+                }  */
+              } 
+              stage('Insert to APIM') {
+                steps {
+                    script {
+                        def env = 'pcq';
+                        def branch_contains2 = 'release/';
+                        def prefix = params.APP_ENV - env;
+                        def AZURE_grp_name="pcq-" + prefix + "-us-c-rg";
+                        def AZURE_apim_name="pcq-" + prefix + "-us-c-apim";
+                        echo AZURE_grp_name
+                        echo AZURE_apim_name
+                         
+                        sh("az apim api update --api-id ${api_name} --resource-group ${AZURE_grp_name} --service-name ${AZURE_apim_name} --service-url ${Azure_api_endpoint}")
+ 
+                  }
+                  /*post  {
+                  always {
+                         echo "Insert to APIM"
+                  }
+                  failure {
+                         echo "Insert to APIM"
+                         mail body: 'Insert to APIM failed', subject: 'Insert to APIM Secret',
+                           to: 'maribell.sabik@optum.com'
+                  }
+                  success {
+                         echo "Insert to APIM Secret"
+                         mail body: 'Insert to APIM succeeded', subject: 'Insert to APIM Secret',
+                            to: 'maribell.sabik@optum.com' 
+                  }
+                }  */
+              }
+          }         
+   }
+}
