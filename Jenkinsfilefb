@@ -1,0 +1,467 @@
+#!/usr/bin/env groovy
+import hudson.model.*
+@Library("com.optum.jenkins.pipeline.library@master") _
+
+pipeline {
+    agent any 
+    tools { maven 'Maven-3.2.3' }
+    parameters{
+
+        extendedChoice(description: 'What environment is this deploy to?', multiSelectDelimiter: ',', name: 'APP_ENV', quoteValue: false, saveJSONParameterToFile: false, type: 'PT_CHECKBOX', value: 'test,stage,perf,trng,pcqtest,pcqstge,pcqperf,pcqtkch', visibleItemCount: 8)
+        string(defaultValue: "values.yaml", description: 'What is the name of the values file? Ex:  value_test.yaml', name: 'valuefile_name')
+        extendedChoice(description: 'Name of values file you want to override the 1st values file with?', defaultValue: 'values_test.yaml',multiSelectDelimiter: ',', name: 'valuefile2_name', quoteValue: false, saveJSONParameterToFile: false, type: 'PT_CHECKBOX', value: 'values_test.yaml,values_stage.yaml,values_perf.yaml,values_trng.yaml', visibleItemCount: 4)
+        string(description: 'What is the name of this new microservice? Ex: getpaymentmethods. PLEASE REPLACE THIS!!', name: 'microsvc_name')
+        string(description: 'Working branch.', name: 'branch_name')
+        string(description: 'Name of the Git Repo for service.', name: 'repo_name')
+        extendedChoice(description: 'What is the name of the AKS namespace this will deploy into? LEGACY > Test: test-repl-nvg;  Performance: perf-repl-nvg; Test Kitchen: trng-repl-nvg; Production: prod-repl-nvg', multiSelectDelimiter: ',', name: 'namespc_name', quoteValue: false, saveJSONParameterToFile: false, type: 'PT_CHECKBOX', value: 'test-repl-nvg,perf-repl-nvg,trng-repl-nvg,prod-repl-nvg,pcq-test,pcq-stge,pcq-perf,pcq-tkch,pcq-test-repl', visibleItemCount: 9)
+        extendedChoice(description: 'What is the prefix on the resource group name? navigator or pcq?', multiSelectDelimiter: ',', name: 'prefix', quoteValue: false, saveJSONParameterToFile: false, type: 'PT_CHECKBOX', value: 'navigator,pcq', visibleItemCount: 2)
+
+
+    }
+    //helm upgrade -i -f $valuefile_name -f $valuefile2_name $microsvc_name  ./$microsvc_name --namespace $namespc_name
+    //helm upgrade -i -f $valuefile_name -f $valuefile2_name $microsvc_name  ./$microsvc_name --set image.repository=nvgtstuscacr.azurecr.io/$microsvc_name --set image.tag=$BUILD_NUMBER --namespace $namespc_name
+    //                    sed -i "s/CLIENTID/${env.CLIENT_ID2}/g" src/main/resources/application.yml
+    //                sed -i "s/CLIENTSECRET/${env.CLIENT_SECRET2}/g" src/main/resources/application.yml
+    //                sed -i "s/TENANTID/$TENANT_ID/g" src/main/resources/application.yml
+    //kubectl rollout restart deploy $microsvc_name -n $namespc_name
+    stages {
+        stage('Azure Login') {
+            steps {
+                script {
+                try { 
+                        withCredentials([azureServicePrincipal(credentialsId: 'NVGTSTAZURE',
+                                    subscriptionIdVariable: 'SUBS_ID',
+                                    clientIdVariable: 'CLIENT_ID',
+                                    clientSecretVariable: 'CLIENT_SECRET',
+                                    tenantIdVariable: 'TENANT_ID')]) {
+                sh '''
+                az login --service-principal -u $CLIENT_ID -p $CLIENT_SECRET -t $TENANT_ID
+                az account set -s "OptumRx Navigator 2 Cloud Non-Prod"
+                cd $WORKSPACE
+                sed -i "s/CLIENTID/$CLIENT_ID/g" src/main/resources/application.yml
+                sed -i "s/CLIENTSECRET/$CLIENT_SECRET/g" src/main/resources/application.yml
+                sed -i "s/TENANTID/$TENANT_ID/g" src/main/resources/application.yml
+                cat src/main/resources/application.yml
+                echo "**********************************"
+                '''
+                }
+            } catch (err) {
+                            echo err.getMessage()
+                            echo "Error detected, but we will continue."
+                     }
+          }
+        }
+        post  {
+                  always {
+                         echo "Azure Login for "
+                  }
+                  failure {
+                         echo "Azure Login failed **"
+                         mail body: 'Azure Login failed for  **', subject: 'Azure Login ',
+                            to: 'maribell.sabik@optum.com'
+                  }
+                  success {
+                         echo "Azure Login succeeded "
+                         mail body: 'Azure Login succeeded for ', subject: 'Azure Login ',
+                            to: 'maribell.sabik@optum.com' 
+                  }
+            }
+        }
+        stage('Deploy Service1') {
+                steps {
+                    script {
+                         build job: '/PharmacyCentral/PharmacyCentral-DockerBuild-Microservices', parameters: [string(name: 'microsvc_name', value: "gethealthconditioncodes"), string(name: 'APP_ENV', value: "${APP_ENV}"), string(name: 'branch_name', value: "release/21.01.00_GetHealthConditionCodes"), string(name: 'repo_name', value: "GetHealthConditionCodes"), string(name: 'namespc_name', value: "${namespc_name}"), string(name: 'prefix', value: "${prefix}")]
+                    }
+                  }
+                  post  {
+                  always {
+                         echo "Deploy Service1"
+                  }
+                  failure {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service failed', subject: 'Deploy Service',
+                           to: 'maribell.sabik@optum.com'
+                  }
+                  success {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service succeeded', subject: 'Deploy Service',
+                            to: 'maribell.sabik@optum.com' 
+                  }
+                } 
+              } 
+        stage('Deploy Service2') {
+                steps {
+                    script {
+                         build job: '/PharmacyCentral/PharmacyCentral-DockerBuild-Microservices', parameters: [string(name: 'microsvc_name', value: "deletepatientotcherbalcodes"), string(name: 'APP_ENV', value: "${APP_ENV}"), string(name: 'branch_name', value: "release/21.01.01_DeletePatientOTCHerbalCodes"), string(name: 'repo_name', value: "DeletePatientOTCHerbalCodes"), string(name: 'namespc_name', value: "${namespc_name}"), string(name: 'prefix', value: "${prefix}")]
+                    }
+                  }
+                  post  {
+                  always {
+                         echo "Deploy Service2"
+                  }
+                  failure {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service failed', subject: 'Deploy Service',
+                           to: 'maribell.sabik@optum.com'
+                  }
+                  success {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service succeeded', subject: 'Deploy Service',
+                            to: 'maribell.sabik@optum.com' 
+                  }
+                } 
+              } 
+        stage('Deploy Service3') {
+                steps {
+                    script {
+                         build job: '/PharmacyCentral/PharmacyCentral-DockerBuild-Microservices', parameters: [string(name: 'microsvc_name', value: "updatepatientotcherbalcodes"), string(name: 'APP_ENV', value: "${APP_ENV}"), string(name: 'branch_name', value: "release/21.01.01_UpdatePatientOTCHerbalCodes"), string(name: 'repo_name', value: "UpdatePatientOTCHerbalCodes"), string(name: 'namespc_name', value: "${namespc_name}"), string(name: 'prefix', value: "${prefix}")]
+                    }
+                  }
+                  post  {
+                  always {
+                         echo "Deploy Service3"
+                  }
+                  failure {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service failed', subject: 'Deploy Service',
+                           to: 'maribell.sabik@optum.com'
+                  }
+                  success {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service succeeded', subject: 'Deploy Service',
+                            to: 'maribell.sabik@optum.com' 
+                  }
+                } 
+              }
+        stage('Deploy Service4') {
+                steps {
+                    script {
+                         build job: '/PharmacyCentral/PharmacyCentral-DockerBuild-Microservices', parameters: [string(name: 'microsvc_name', value: "updatepatientallergy"), string(name: 'APP_ENV', value: "${APP_ENV}"), string(name: 'branch_name', value: "release/21.01.00_UpdatePatientAllergies"), string(name: 'repo_name', value: "Pharmacy_Central_Experience_Api_UpdatePatientAllergies"), string(name: 'namespc_name', value: "${namespc_name}"), string(name: 'prefix', value: "${prefix}")]
+                    }
+                  }
+                  post  {
+                  always {
+                         echo "Deploy Service4"
+                  }
+                  failure {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service failed', subject: 'Deploy Service',
+                           to: 'maribell.sabik@optum.com'
+                  }
+                  success {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service succeeded', subject: 'Deploy Service',
+                            to: 'maribell.sabik@optum.com' 
+                  }
+                } 
+              } 
+        stage('Deploy Service5') {
+                steps {
+                    script {
+                         build job: '/PharmacyCentral/PharmacyCentral-DockerBuild-Microservices', parameters: [string(name: 'microsvc_name', value: "getpatientotcherbalcodes"), string(name: 'APP_ENV', value: "${APP_ENV}"), string(name: 'branch_name', value: "release/21.01.01_GetPatientOTCHerbalCodes"), string(name: 'repo_name', value: "GetPatientOTCHerbalCodes"), string(name: 'namespc_name', value: "${namespc_name}"), string(name: 'prefix', value: "${prefix}")]
+                    }
+                  }
+                  post  {
+                  always {
+                         echo "Deploy Service5"
+                  }
+                  failure {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service failed', subject: 'Deploy Service',
+                           to: 'maribell.sabik@optum.com'
+                  }
+                  success {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service succeeded', subject: 'Deploy Service',
+                            to: 'maribell.sabik@optum.com' 
+                  }
+                } 
+              } 
+        stage('Deploy Service6') {
+                steps {
+                    script {
+                         build job: '/PharmacyCentral/PharmacyCentral-DockerBuild-Microservices', parameters: [string(name: 'microsvc_name', value: "addpatientotcherbalcodes"), string(name: 'APP_ENV', value: "${APP_ENV}"), string(name: 'branch_name', value: "release/21.01.01_AddPatientOTCHerbalCodes"), string(name: 'repo_name', value: "Pharmacy_Central_Experience_Api_AddPatientOTCHerbalCodes"), string(name: 'namespc_name', value: "${namespc_name}"), string(name: 'prefix', value: "${prefix}")]
+                    }
+                  }
+                  post  {
+                  always {
+                         echo "Deploy Service6"
+                  }
+                  failure {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service failed', subject: 'Deploy Service',
+                           to: 'maribell.sabik@optum.com'
+                  }
+                  success {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service succeeded', subject: 'Deploy Service',
+                            to: 'maribell.sabik@optum.com' 
+                  }
+                } 
+              } 
+        stage('Deploy Service7') {
+                steps {
+                    script {
+                         build job: '/PharmacyCentral/PharmacyCentral-DockerBuild-Microservices', parameters: [string(name: 'microsvc_name', value: "tokenservice"), string(name: 'APP_ENV', value: "${APP_ENV}"), string(name: 'branch_name', value: "release/20.06.01_TokenService"), string(name: 'repo_name', value: "Navigator_experience-api_Token_Service"), string(name: 'namespc_name', value: "${namespc_name}"), string(name: 'prefix', value: "${prefix}")]
+                    }
+                  }
+                  post  {
+                  always {
+                         echo "Deploy Service7"
+                  }
+                  failure {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service failed', subject: 'Deploy Service',
+                           to: 'maribell.sabik@optum.com'
+                  }
+                  success {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service succeeded', subject: 'Deploy Service',
+                            to: 'maribell.sabik@optum.com' 
+                  }
+                } 
+              } 
+        stage('Deploy Service8') {
+                steps {
+                    script {
+                         build job: '/PharmacyCentral/PharmacyCentral-DockerBuild-Microservices', parameters: [string(name: 'microsvc_name', value: "getmemberdetails"), string(name: 'APP_ENV', value: "${APP_ENV}"), string(name: 'branch_name', value: "release/20.10.01_GetMemberDetails"), string(name: 'repo_name', value: "Pharmacy_Central_Experience_Api_GetMemberDetails"), string(name: 'namespc_name', value: "${namespc_name}"), string(name: 'prefix', value: "${prefix}")]
+                    }
+                  }
+                  post  {
+                  always {
+                         echo "Deploy Service8"
+                  }
+                  failure {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service failed', subject: 'Deploy Service',
+                           to: 'maribell.sabik@optum.com'
+                  }
+                  success {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service succeeded', subject: 'Deploy Service',
+                            to: 'maribell.sabik@optum.com' 
+                  }
+                } 
+              } 
+        stage('Deploy Service9') {
+                steps {
+                    script {
+                         build job: '/PharmacyCentral/PharmacyCentral-DockerBuild-Microservices', parameters: [string(name: 'microsvc_name', value: "prescriptionhistory"), string(name: 'APP_ENV', value: "${APP_ENV}"), string(name: 'branch_name', value: "release/20.12.00_PrescriptionHistory"), string(name: 'repo_name', value: "Pharmacy_Central_Experience_Api_PrescriptionHistory"), string(name: 'namespc_name', value: "${namespc_name}"), string(name: 'prefix', value: "${prefix}")]
+                    }
+                  }
+                  post  {
+                  always {
+                         echo "Deploy Service9"
+                  }
+                  failure {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service failed', subject: 'Deploy Service',
+                           to: 'maribell.sabik@optum.com'
+                  }
+                  success {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service succeeded', subject: 'Deploy Service',
+                            to: 'maribell.sabik@optum.com' 
+                  }
+                } 
+              } 
+        stage('Deploy Service10') {
+                steps {
+                    script {
+                         build job: '/PharmacyCentral/PharmacyCentral-DockerBuild-Microservices', parameters: [string(name: 'microsvc_name', value: "membersearchv2"), string(name: 'APP_ENV', value: "${APP_ENV}"), string(name: 'branch_name', value: "release/20.12.00_MemberSearch"), string(name: 'repo_name', value: "PharmacyCentral-Experience-API_MemberSearch"), string(name: 'namespc_name', value: "${namespc_name}"), string(name: 'prefix', value: "${prefix}")]
+                    }
+                  }
+                  post  {
+                  always {
+                         echo "Deploy Service10"
+                  }
+                  failure {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service failed', subject: 'Deploy Service',
+                           to: 'maribell.sabik@optum.com'
+                  }
+                  success {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service succeeded', subject: 'Deploy Service',
+                            to: 'maribell.sabik@optum.com' 
+                  }
+                } 
+              } 
+        stage('Deploy Service11') {
+                steps {
+                    script {
+                         build job: '/PharmacyCentral/PharmacyCentral-DockerBuild-Microservices', parameters: [string(name: 'microsvc_name', value: "getpatientallergy"), string(name: 'APP_ENV', value: "${APP_ENV}"), string(name: 'branch_name', value: "release/20.12.01_GetPatientAllergy"), string(name: 'repo_name', value: "Pharmacy_Central_Experience_Api_GetPatientAllergy"), string(name: 'namespc_name', value: "${namespc_name}"), string(name: 'prefix', value: "${prefix}")]
+                    }
+                  }
+                  post  {
+                  always {
+                         echo "Deploy Service11"
+                  }
+                  failure {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service failed', subject: 'Deploy Service',
+                           to: 'maribell.sabik@optum.com'
+                  }
+                  success {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service succeeded', subject: 'Deploy Service',
+                            to: 'maribell.sabik@optum.com' 
+                  }
+                } 
+              } 
+        stage('Deploy Service12') {
+                steps {
+                    script {
+                         build job: '/PharmacyCentral/PharmacyCentral-DockerBuild-Microservices', parameters: [string(name: 'microsvc_name', value: "orderdetails"), string(name: 'APP_ENV', value: "${APP_ENV}"), string(name: 'branch_name', value: "release/20.12.00_OrderDetails"), string(name: 'repo_name', value: "PharmacyCentral_experience-api_OrderDetails"), string(name: 'namespc_name', value: "${namespc_name}"), string(name: 'prefix', value: "${prefix}")]
+                    }
+                  }
+                  post  {
+                  always {
+                         echo "Deploy Service12"
+                  }
+                  failure {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service failed', subject: 'Deploy Service',
+                           to: 'maribell.sabik@optum.com'
+                  }
+                  success {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service succeeded', subject: 'Deploy Service',
+                            to: 'maribell.sabik@optum.com' 
+                  }
+                } 
+              } 
+        stage('Deploy Service13') {
+                steps {
+                    script {
+                         build job: '/PharmacyCentral/PharmacyCentral-DockerBuild-Microservices', parameters: [string(name: 'microsvc_name', value: "getdrughistory"), string(name: 'APP_ENV', value: "${APP_ENV}"), string(name: 'branch_name', value: "release/20.12.01_GetDrugHistory"), string(name: 'repo_name', value: "GetDrugHistory"), string(name: 'namespc_name', value: "${namespc_name}"), string(name: 'prefix', value: "${prefix}")]
+                    }
+                  }
+                  post  {
+                  always {
+                         echo "Deploy Service13"
+                  }
+                  failure {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service failed', subject: 'Deploy Service',
+                           to: 'maribell.sabik@optum.com'
+                  }
+                  success {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service succeeded', subject: 'Deploy Service',
+                            to: 'maribell.sabik@optum.com' 
+                  }
+                } 
+              }  
+        stage('Deploy Service14') {
+                steps {
+                    script {
+                         build job: '/PharmacyCentral/PharmacyCentral-DockerBuild-Microservices', parameters: [string(name: 'microsvc_name', value: "getallergies"), string(name: 'APP_ENV', value: "${APP_ENV}"), string(name: 'branch_name', value: "release/20.12.02_GetAllergies"), string(name: 'repo_name', value: "Pharmacy_Central_Experience_Api_GetAllergies"), string(name: 'namespc_name', value: "${namespc_name}"), string(name: 'prefix', value: "${prefix}")]
+                    }
+                  }
+                  post  {
+                  always {
+                         echo "Deploy Service14"
+                  }
+                  failure {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service failed', subject: 'Deploy Service',
+                           to: 'maribell.sabik@optum.com'
+                  }
+                  success {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service succeeded', subject: 'Deploy Service',
+                            to: 'maribell.sabik@optum.com' 
+                  }
+                } 
+              }
+        stage('Deploy Service15') {
+                steps {
+                    script {
+                         build job: '/PharmacyCentral/PharmacyCentral-DockerBuild-Microservices', parameters: [string(name: 'microsvc_name', value: "getpatientdemographics"), string(name: 'APP_ENV', value: "${APP_ENV}"), string(name: 'branch_name', value: "release/20.12.00_GetPatientDemographics"), string(name: 'repo_name', value: "Pharmacy_Central_Experience_Api_GetPatientDemographics-"), string(name: 'namespc_name', value: "${namespc_name}"), string(name: 'prefix', value: "${prefix}")]
+                    }
+                  }
+                  post  {
+                  always {
+                         echo "Deploy Service15"
+                  }
+                  failure {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service failed', subject: 'Deploy Service',
+                           to: 'maribell.sabik@optum.com'
+                  }
+                  success {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service succeeded', subject: 'Deploy Service',
+                            to: 'maribell.sabik@optum.com' 
+                  }
+                } 
+              }  
+        stage('Deploy Service16') {
+                steps {
+                    script {
+                         build job: '/PharmacyCentral/PharmacyCentral-DockerBuild-Microservices', parameters: [string(name: 'microsvc_name', value: "getpaymentmethods"), string(name: 'APP_ENV', value: "${APP_ENV}"), string(name: 'branch_name', value: "rrelease/20.12.00_GetPaymentMethods"), string(name: 'repo_name', value: "Pharmacy_Central_Experience_Api_GetPaymentMethods"), string(name: 'namespc_name', value: "${namespc_name}"), string(name: 'prefix', value: "${prefix}")]
+                    }
+                  }
+                  post  {
+                  always {
+                         echo "Deploy Service16"
+                  }
+                  failure {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service failed', subject: 'Deploy Service',
+                           to: 'maribell.sabik@optum.com'
+                  }
+                  success {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service succeeded', subject: 'Deploy Service',
+                            to: 'maribell.sabik@optum.com' 
+                  }
+                } 
+              }  
+        stage('Deploy Service17') {
+                steps {
+                    script {
+                         build job: '/PharmacyCentral/PharmacyCentral-DockerBuild-Microservices', parameters: [string(name: 'microsvc_name', value: "memberfamilydetails"), string(name: 'APP_ENV', value: "${APP_ENV}"), string(name: 'branch_name', value: "release/20.12.00_GetMemberFamilyDetails"), string(name: 'repo_name', value: "Pharmacy_Central_Experience_Api_GetMemberFamilyDetails"), string(name: 'namespc_name', value: "${namespc_name}"), string(name: 'prefix', value: "${prefix}")]
+                    }
+                  }
+                  post  {
+                  always {
+                         echo "Deploy Service17"
+                  }
+                  failure {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service failed', subject: 'Deploy Service',
+                           to: 'maribell.sabik@optum.com'
+                  }
+                  success {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service succeeded', subject: 'Deploy Service',
+                            to: 'maribell.sabik@optum.com' 
+                  }
+                } 
+              }  
+        stage('Deploy Service18') {
+                steps {
+                    script {
+                         build job: '/PharmacyCentral/PharmacyCentral-DockerBuild-Microservices', parameters: [string(name: 'microsvc_name', value: "getpatienthealthconditions"), string(name: 'APP_ENV', value: "${APP_ENV}"), string(name: 'branch_name', value: "release/20.12.01_PatientHealthConditions"), string(name: 'repo_name', value: "PatientHealthConditions"), string(name: 'namespc_name', value: "${namespc_name}"), string(name: 'prefix', value: "${prefix}")]
+                    }
+                  }
+                  post  {
+                  always {
+                         echo "Deploy Service18"
+                  }
+                  failure {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service failed', subject: 'Deploy Service',
+                           to: 'maribell.sabik@optum.com'
+                  }
+                  success {
+                         echo "Deploy Service"
+                         mail body: 'Deploy Service succeeded', subject: 'Deploy Service',
+                            to: 'maribell.sabik@optum.com' 
+                  }
+                } 
+              }  
+    }
+}
